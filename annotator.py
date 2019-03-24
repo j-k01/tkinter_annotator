@@ -3,20 +3,27 @@ import tkinter as tk
 from os import path
 from os import listdir
 from PIL import Image, ImageTk
+from copy import deepcopy
 
 class listWalker():
     def __init__(self, n):
         self.list = n
         self.index = 0
-    
+        self.error = 'O.K.'
     def advance(self):
         if self.index < len(self.list)-1:
             self.index +=1
+        else:
+            self.error = "No more images to the right."
+            raise IndexError
         return self.list[self.index]
     
     def back(self):
         if self.index != 0:
             self.index -=1
+        else:
+            self.error = "No more images to the left."
+            raise IndexError
         return self.list[self.index]
 
     def current(self):
@@ -35,33 +42,7 @@ class imageBuddy():
         
         self._importImagePaths()
         self._checkLog()
-        self.wrap_dict = {'thermal':self.thermal_dir, 'rgb':self.rgb_dir}
-        
-    
-    class pathWrapper():
-        def __init__(self, imageBuddy):
-            self.buddy = imageBuddy
-            self.raw = self.__makeRawWalker()
-            
-        def __makeRawWalker(self):
-            unannotated_images = []
-            for image, info in self.buddy.imageDict.items():
-                print(image)
-                if info.get('logged') != True:
-                    unannotated_images.append(image)
-            return listWalker(unannotated_images)
-        
-        def current(self, wrap):
-            return path.join(self.buddy.wrap_dict.get(wrap), self.raw.current())
-        def advance(self, wrap):
-            return path.join(self.buddy.wrap_dict.get(wrap), self.raw.advance())
-        def back(self, wrap):
-            return path.join(self.buddy.wrap_dict.get(wrap), self.raw.back())
-        def delete_entry(self):
-            self.raw.delete_entry()
-     
-        
-    
+
     
         
     def _importImagePaths(self):
@@ -94,33 +75,37 @@ class imageBuddy():
             except KeyError:
                 if not suppress_warnings:
                     print('WARN: log contains entries not in data')
-    '''
-    def makeWalker(self):
-        unannotated_images = []
-        for image, info in self.imageDict.items():
-            if info.get('logged') != True:
-                unannotated_images.append(image)
-        return listWalker(unannotated_images)
-'''
+    
+    def saveAnnotation(self, image):
+        boxes = self.imageDict.get(image).get('rects')
+        box_string = [','.join((','.join(map(lambda x: str(int(x)), x['coords'])), x['label'])) for x in boxes.values()]
+        out_string = self.imageDict.get(image).get('thermal')
+        out_string += ' ' +' '.join(box_string)
+        with open(self.log_dir, 'a') as log_file:
+            log_file.write(out_string +'\n')
+        self.imageDict[image].update({'logged':True})
         
-
-class App(tk.Frame):
+        
+class Annotator(tk.Frame):
     def __init__( self, window):
         tk.Frame.__init__(self, window)
         self.window = window
         self.window.configure(background = 'grey')
         
         self.imageBuddy = imageBuddy()
-        self.unsaved = self.imageBuddy.pathWrapper(self.imageBuddy)
+        self.unsaved = self._makeListWalker()
         
         self.thermal_var = tk.BooleanVar()
+        self.infobar_display = tk.StringVar()
         self.vision_mode = 'rgb'
+        self.okay_status = 'Status O.K.'
         #self.window.grid_columnconfigure(3, minsize=400)
         self._createWidgets()
         self._createLayout()
         self._createBindings()
         
         self._createCanvasVariables()
+        #self._startupProgram()
         
         self.rect_dict ={}
         self._listRectFM = {}
@@ -134,10 +119,22 @@ class App(tk.Frame):
         
         self.currentImage()
         
+    def _makeListWalker(self, log_mode = False):
+        walkable_images = []
+        if log_mode:
+            for image, info in self.imageBuddy.imageDict.items():
+                if info.get('logged') != True and info.get('rects'):
+                    walkable_images.append(image)
+        else:
+            for image, info in self.imageBuddy.imageDict.items():
+                if info.get('logged') != True:
+                    walkable_images.append(image)
+        return listWalker(walkable_images)
+
     def currentImage(self):
-        image = Image.open(self.unsaved.current(self.vision_mode))
+        image = Image.open(self.imageBuddy.imageDict.get(self.unsaved.current()).get(self.vision_mode))
         photo = ImageTk.PhotoImage(image)
-        #self.img = tk.PhotoImage(image = photo)   
+        
         self.img = photo
         
         self.canvas.delete(self.background_object)
@@ -145,44 +142,127 @@ class App(tk.Frame):
         self.background_object = self.canvas.create_image((0,0), anchor = tk.NW, image=self.img)    
         self.canvas.tag_lower(self.background_object)
         
-        
-    def next_image(self):
-        image = Image.open(self.unsaved.advance(self.vision_mode))
-        photo = ImageTk.PhotoImage(image)
-        #self.img = tk.PhotoImage(image = photo)   
-        self.img = photo
-        
+    def _endProgram(self):
+        self._destroyAllRects()
         self.canvas.delete(self.background_object)
-        self.img = photo
+        image = Image.open('end.jpg')
+        self.img = ImageTk.PhotoImage(image)
+        self.background_object = self.canvas.create_image((0,0), anchor = tk.NW, image=self.img)    
+        
+        self.infobar_display.set('All images annotated.')
+        self._dismantleWindow()
+        
+    def replaceCanvas(self):
+        try:
+            cur_image = self.unsaved.current()
+        except:
+            self.unsaved = self._makeListWalker(log_mode=False)
+            cur_image = self.unsaved.current()
+        self.canvas.delete(self.background_object)
+        image = Image.open(self.imageBuddy.imageDict.get(cur_image).get(self.vision_mode))
+        self.img = ImageTk.PhotoImage(image)
         self.background_object = self.canvas.create_image((0,0), anchor = tk.NW, image=self.img)    
         self.canvas.tag_lower(self.background_object)
+        #retrieve stored dictionary
+        tempdict = self.imageBuddy.imageDict.get(cur_image).get('rects')
+        if tempdict == None:
+            tempdict = {}
+
+        #create all new objects out of that dictionary, but return a new dictionary
+        #with the new object id numbers
+        newdict = {}        
+        for rect, data in tempdict.items():
+            self.rectx0, self.recty0, self.rectx1, self.recty1 = data.get('coords')
+            self.active_rect = self.canvas.create_rectangle(self.rectx0, self.recty0,
+                                                     self.rectx1, self.recty1,
+                                                     width = 2,
+                                                     outline = 'red')
+            newdict[self.active_rect] = data
+        
+        
+        #destroy all old objects        
+        self._destroyAllRects()
+        
+        #replace active dictionary with newly build objects dictionary
+        self.rect_dict = deepcopy(newdict)
+        self.active_rect = None
+        self._update()
+    
+    def _destroyAllRects(self):
+        temp_for_delete = [rect for rect in self.rect_dict.keys()]
+        for rect in temp_for_delete:
+            self.active_rect = rect
+            self.destroyRect()
+        del temp_for_delete
         
             
+    def saveCurrent(self):
+        cur_image = self.unsaved.current()
+        if not self.rect_dict:
+            self.infobar_display.set("Cannot save image with no annotations. Nullate instead.")
+        else:
+            self.imageBuddy.imageDict.get(cur_image).update({'rects':self.rect_dict.copy()})
+            self.imageBuddy.saveAnnotation(cur_image)
+            try:
+                self.unsaved.delete_entry()
+                self.replaceCanvas()
+            except IndexError:
+                self._endProgram()
+        
+    
+    def next_image(self):
+        self.infobar_display.set(self.okay_status)
+        cur_image = self.unsaved.current()
+        self.imageBuddy.imageDict.get(cur_image).update({'rects':self.rect_dict.copy()})
+        try:
+            self.unsaved.advance()
+        except IndexError:  
+            self.infobar_display.set(self.unsaved.error)
+        self.replaceCanvas()
+    
     def prev_image(self):
-        image = Image.open(self.unsaved.back(self.vision_mode))
-        photo = ImageTk.PhotoImage(image)
-        #self.img = tk.PhotoImage(image = photo)   
-        self.img = photo
+        self.infobar_display.set(self.okay_status)
+        cur_image = self.unsaved.current()
+        self.imageBuddy.imageDict.get(cur_image).update({'rects':self.rect_dict.copy()})
+        try:
+            self.unsaved.back()
+        except IndexError:  
+            self.infobar_display.set(self.unsaved.error)
+        self.replaceCanvas()
         
-        self.canvas.delete(self.background_object)
-        self.img = photo
-        self.background_object = self.canvas.create_image((0,0), anchor = tk.NW, image=self.img)    
-        self.canvas.tag_lower(self.background_object)
-        
-                
-        
-                
-    def _init_image(self):
+    def _startupProgram(self):
         if self.thermal_var.get():
             self.vision_mode = 'thermal'
         else:
             self.vision_mode = 'rgb'
-        image = Image.open(self.unsaved.current(self.vision_mode))
-        photo = ImageTk.PhotoImage(image)
-        #self.img = tk.PhotoImage(image = photo)   
-        self.img = photo
-        
-        
+        try:
+            cur_image = self.unsaved.current()
+            image = Image.open(self.imageBuddy.imageDict.get(cur_image).get(self.vision_mode))
+            self.img= ImageTk.PhotoImage(image)
+            self.infobar_display.set(self.okay_status)
+        except IndexError:
+            image = Image.open('end.jpg')
+            self.img = ImageTk.PhotoImage(image)
+            self.infobar_display.set('No unannotated images found in working directory.')
+
+            self._dismantleWindow()
+            
+    def doNothing(self):
+        pass
+    
+    def _dismantleWindow(self):
+        buttons_to_dismantle = [
+                self.advanceButton,
+                self.backButton,
+                self.thermalCheck,
+                self.saveButton,
+                self.nullButton,
+                self.logButton]
+        for button in buttons_to_dismantle:
+            button.grid_forget()
+            button.configure(command=self.doNothing)
+        self.L.delete(0, tk.END)
+
         
     def _createCanvasVariables(self):
         self.rectx0 = 0
@@ -196,7 +276,6 @@ class App(tk.Frame):
         self.cursory=0
         self.make_mode = False
         self.drag_mode = False
-       # self.rect_objects = []
         self.active_rect = None
         self.active_label = 'human'
         self.background_objcect = None
@@ -218,32 +297,83 @@ class App(tk.Frame):
         self.labelForm.insert(tk.END, 'human')
         
         self.thermalCheck = tk.Checkbutton(self.window, 
-                                           text = 'THERMAL', 
+                                           text = 'Thermal', 
                                            variable =self.thermal_var,
                                            command = self.switchView)
         self.L = tk.Listbox(self.window, highlightbackground = 'red')
-
-        
+        self.saveButton = tk.Button(self.window,
+                                    text = 'SAVE',
+                                    command =self.saveCurrent,
+                                    width =10)
+        self.infobar = tk.Label(self.window,
+                                textvariable = self.infobar_display,
+                                anchor = tk.W)
+        self.logButton = tk.Button(self.window,
+                                   text= 'LOG',
+                                   command = self.logAll,
+                                   width = 10)
+        self.nullButton = tk.Button(self.window,
+                                    text = 'NULL',
+                                    command =self.nullCurrent,
+                                    width=10)
+        self.quitButton = tk.Button(self.window,
+                                    text = 'QUIT',
+                                    command = self.window.destroy,
+                                    width=25)
+     
     def _createLayout(self):
+        self.window.grid_columnconfigure(0, minsize=30)
+        self.window.grid_rowconfigure(0, minsize=30)
 
+        self.canvas.grid(row=1, column=1, columnspan = 10,rowspan = 10)
+        self.window.grid_rowconfigure(11, minsize=15)
+        self.advanceButton.grid(row=12,column=7)
+        self.saveButton.grid(row=12, column=5)
+        self.backButton.grid(row=12,column=3)
+       # self.window.grid_rowconfigure(13, minsize=10)
+        
+        self.window.grid_columnconfigure(11, minsize=30)
         self.L.config(width=30)
-        #self.frame = tk.Button(self.window, width = 200, height = 200)
-        #self.frame2 = tk.Button(self.window, width = 200, height = 200)
+        self.L.grid(row=1, column =12, columnspan =3,rowspan =2, sticky='nw')
+        self.labelForm.grid(row=3, column=12, sticky='w')
+        self.labelForm.configure(width=15)
+        self.labelButton.grid(row=3, column=13, sticky='w')
+        self.thermalCheck.grid(row=4, column=12, sticky='w')
         
-        self.canvas.grid(row=0, column=1, rowspan=10)
-        self.labelForm.grid(row=0, column=2)
-        self.labelButton.grid(row=0, column=3)
-        self.L.grid(row=1, column =2, columnspan=1, rowspan=1)
-        self.advanceButton.grid(row=2,column=3)
-        self.backButton.grid(row=2,column=2)
-        self.thermalCheck.grid(row=3, column=2)
-        self.img = tk.PhotoImage(file="testimg.jpg")   
+        self.nullButton.grid(row=7, column=12, sticky='w')
+        self.logButton.grid(row=7, column =13, sticky='w')
+        self.infobar.grid(row=0, column=1, columnspan=10, sticky='sw')
+        
+        self.quitButton.grid(row =10, column=12, columnspan=3, sticky='sw')
+        
         self.img = tk.PhotoImage(file="testimg.jpg")  
-        self._init_image()
+        self._startupProgram()
         self.background_object = self.canvas.create_image((0,0), anchor = tk.NW, image=self.img)    
+
+
+    def logAll(self):
+        cur_image = self.unsaved.current()
+        self.imageBuddy.imageDict.get(cur_image).update({'rects':self.rect_dict.copy()})
+        self.unsaved = self._makeListWalker(log_mode =True)
+        logcount = len(self.unsaved.list)
+        self.replaceCanvas()
         
-       # self.frame2.grid(row=1, column=0, sticky='nsew')
-       # self.frame.grid(row=0, column=2, sticky='nsew')
+        for x in range(logcount):
+            self.saveCurrent()
+        self.infobar_display.set("{} images logged.".format(logcount))
+        
+    def nullCurrent(self):
+        cur_image = self.unsaved.current()
+        nullbox = {'rects':{1:{'coords':[],'label':'null'}}}
+        self.imageBuddy.imageDict.get(cur_image).update(nullbox)
+        self.imageBuddy.saveAnnotation(cur_image)
+        try:
+            self.unsaved.delete_entry()
+            self.replaceCanvas()
+        except IndexError:
+            self._endProgram()
+        
+                
     def pushLabel(self):
         self.active_label = self.labelForm.get("1.0",'end-1c')
         if self.active_rect:
@@ -275,12 +405,6 @@ class App(tk.Frame):
         self._highlightActive()
         
     def _highlightActive(self):
-        #print(self.active_rect)
-        #for rect in self.rect_objects:
-        #    if rect != self.active_rect:
-        #        self.canvas.itemconfig(rect, outline='black')
-        #    else:
-        #        self.canvas.itemconfig(rect, outline = 'red')
         for rect in self.rect_dict.keys():
             if rect != self.active_rect:
                 self.canvas.itemconfig(rect, outline='green')
@@ -316,10 +440,7 @@ class App(tk.Frame):
                 self.canvas.bind( "<Motion>", self.dragRect)
             else:
                 self.active_rect  = selected_rect
- #           self.active_rect = self.active_rect[0]
-            #print('highlighting')
-            
-            #self.canvas.itemconfig(self.active_rect, outline='red')
+                
         else:
             self.rectx0, self.recty0 = self.cursorx, self.cursory
             self.rectx1, self.recty1 = self.rectx0, self.recty0
@@ -357,6 +478,9 @@ class App(tk.Frame):
             del self._listRectFM[self._listRectRM[self.active_rect]]
             del self._listRectRM[self.active_rect]
             
+        try:
+            self.active_rect = sorted(self.rect_dict.keys())[-1]
+        except:
             self.active_rect = None
             
             
@@ -379,22 +503,17 @@ class App(tk.Frame):
 
     def releaseCanvas(self, event):
         self.canvas.unbind("<Motion>")
-        #self.cursorx = self.canvas.canvasx(event.x)
-        #self.cursory = self.canvas.canvasy(event.y) 
-       # if not self.active_rect:
-       #     self.rectx1, self.recty1 = self.cursorx, self.cursory
+
         if self.active_rect:
             self.add2Dictionary(self.active_rect,
                                 coords = self.canvas.coords(self.active_rect),
                                 label = self.active_label)
       
-        #self._updateText()    
-        #self.highlightActive()
         self._update()
         
     def _updateText(self):
         self.L.delete(0, tk.END)
-        self._listBoxRectRef = {}
+ #       self._listBoxRectRef = {}
         for i, (rect, info) in enumerate(self.rect_dict.items()):
             item_string = ' '.join((str(info['coords']), info['label']))
             self.L.insert(tk.END, item_string)
@@ -403,15 +522,25 @@ class App(tk.Frame):
             self._listRectRM[rect] = i
 
     def keyHandler(self, event):
-        if event.char == 'x':
-            self.destroyRect()
-        if event.char == 't':
-            self.thermalCheck.invoke()
-        self._update()
+        if (self.window.focus_get() != self.labelForm): #not trying to type into textbox!
+            if event.char == 'x':
+                self.destroyRect()
+            elif event.char == 't':
+                self.thermalCheck.invoke()
+            elif event.char == 'e':
+                self.advanceButton.invoke()
+            elif event.char == 'w':
+                self.backButton.invoke()
+            elif event.char == 's':
+                self.saveButton.invoke()
+            elif event.char == 'n':
+                self.nullButton.invoke()
+            self._update()
 
 if __name__ == "__main__":
     root = tk.Tk()
-    root.geometry( "1200x600" )
-    app = App(root)
+    root.geometry( "1000x600" )
+    root.title('Thermal Annotator')
+    ann = Annotator(root)
     root.mainloop()
     t = imageBuddy()
