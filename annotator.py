@@ -86,9 +86,9 @@ class imageBuddy():
         self.imageDict[image].update({'logged':True})
         
         
-class Annotator(tk.Frame):
+class Annotator():
     def __init__( self, window):
-        tk.Frame.__init__(self, window)
+        #tk.Frame.__init__(self, window)
         self.window = window
         self.window.configure(background = 'grey')
         
@@ -206,6 +206,7 @@ class Annotator(tk.Frame):
             try:
                 self.unsaved.delete_entry()
                 self.replaceCanvas()
+                self.infobar_display.set('Last image saved.')
             except IndexError:
                 self._endProgram()
         
@@ -248,6 +249,9 @@ class Annotator(tk.Frame):
             self._dismantleWindow()
             
     def doNothing(self):
+        '''
+        Do-nothing "command" for hidden buttons associated with a key-press.
+        '''
         pass
     
     def _dismantleWindow(self):
@@ -301,6 +305,7 @@ class Annotator(tk.Frame):
                                            variable =self.thermal_var,
                                            command = self.switchView)
         self.L = tk.Listbox(self.window, highlightbackground = 'red')
+       # self.labelListBox = tk.Listbox(self.window, highlightbackground = 'blue')
         self.saveButton = tk.Button(self.window,
                                     text = 'SAVE',
                                     command =self.saveCurrent,
@@ -320,6 +325,7 @@ class Annotator(tk.Frame):
                                     text = 'QUIT',
                                     command = self.window.destroy,
                                     width=25)
+    
      
     def _createLayout(self):
         self.window.grid_columnconfigure(0, minsize=30)
@@ -335,10 +341,11 @@ class Annotator(tk.Frame):
         self.window.grid_columnconfigure(11, minsize=30)
         self.L.config(width=30)
         self.L.grid(row=1, column =12, columnspan =3,rowspan =2, sticky='nw')
-        self.labelForm.grid(row=3, column=12, sticky='w')
+      #  self.labelListBox.grid(row=3, column=12, columnspan =3, sticky='w')
+        self.labelForm.grid(row=4, column=12, sticky='w')
         self.labelForm.configure(width=15)
-        self.labelButton.grid(row=3, column=13, sticky='w')
-        self.thermalCheck.grid(row=4, column=12, sticky='w')
+        self.labelButton.grid(row=4, column=13, sticky='w')
+        self.thermalCheck.grid(row=5, column=12, sticky='w')
         
         self.nullButton.grid(row=7, column=12, sticky='w')
         self.logButton.grid(row=7, column =13, sticky='w')
@@ -370,6 +377,7 @@ class Annotator(tk.Frame):
         try:
             self.unsaved.delete_entry()
             self.replaceCanvas()
+            self.infobar_display.set('Last image nullated.')
         except IndexError:
             self._endProgram()
         
@@ -390,9 +398,56 @@ class Annotator(tk.Frame):
         self.canvas.bind( "<ButtonRelease-1>", self.releaseCanvas)
         self.window.bind("<Key>", self.keyHandler)
         self.L.bind("<<ListboxSelect>>", self.listHandler)
-       # self.canvas.bind( "<Key>", self. keyHandler)
+        self.canvas.bind("<Button-2>", self.enterResizeMode)
+        self.canvas.bind("<ButtonRelease-2>", self.exitResizeMode)
+      
+        # self.canvas.bind( "<Key>", self. keyHandler)
 
+    def enterResizeMode(self,event):
+        self.canvas.unbind("<Button-1>")
+        self.canvas.unbind("<ButtonRelease-1>")
+        
+        self.cursorx = self.canvas.canvasx(event.x)
+        self.cursory = self.canvas.canvasy(event.y) 
+        if self.active_rect:
+                self.rectx0, self.recty0, self.rectx1, self.recty1 = self.canvas.coords(self.active_rect)
+                self.drag_refx = self.cursorx
+                self.drag_refy = self.cursory
+                self.canvas.bind( "<Motion>", self.resizeRect)
+        
+    def exitResizeMode(self, event):
+        self.canvas.bind( "<Button-1>", self.clickCanvas)
+        self.canvas.bind( "<ButtonRelease-1>", self.releaseCanvas)
+        self.canvas.unbind("<Motion>")
+        if self.active_rect:
+            self._validateRect()
+            self.add2Dictionary(self.active_rect,
+                                coords = self.canvas.coords(self.active_rect),
+                                label = self.active_label)
+      
+        self._update()
+        
+        
+    def resizeRect(self, event):
+        self.cursorx = self.canvas.canvasx(event.x)
+        self.cursory = self.canvas.canvasy(event.y) 
+        x_shift = self.cursorx - self.drag_refx
+        y_shift = self.cursory - self.drag_refy
+        self.canvas.coords(self.active_rect,
+                               self.rectx0, self.recty0,
+                               #self.cursorx, self.cursory)
+                               self.rectx1+x_shift, self.recty1+y_shift)
+     
+    def _validateRect(self):
+        cur_x0, cur_y0, cur_x1, cur_y1 = self.canvas.coords(self.active_rect)
    
+        cur_x0, cur_x1 = [0 if x<0 else 640 if x>640 else x for x in [cur_x0, cur_x1]]
+        cur_y0, cur_y1 = [0 if y<0 else 512 if y>512 else y for y in [cur_y0, cur_y1]]
+        
+        self.canvas.coords(self.active_rect,
+                           cur_x0, cur_y0, cur_x1, cur_y1)
+
+    
     def listHandler(self, event):
         i = self.L.curselection()
         if i:
@@ -403,6 +458,7 @@ class Annotator(tk.Frame):
 
         self._updateText()
         self._highlightActive()
+        #self.infobar_display.set(self.okay_status)
         
     def _highlightActive(self):
         for rect in self.rect_dict.keys():
@@ -505,6 +561,7 @@ class Annotator(tk.Frame):
         self.canvas.unbind("<Motion>")
 
         if self.active_rect:
+            self._validateRect()
             self.add2Dictionary(self.active_rect,
                                 coords = self.canvas.coords(self.active_rect),
                                 label = self.active_label)
@@ -543,4 +600,3 @@ if __name__ == "__main__":
     root.title('Thermal Annotator')
     ann = Annotator(root)
     root.mainloop()
-    t = imageBuddy()
